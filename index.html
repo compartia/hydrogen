@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hydrogen Atom Orbital Visualizer</title>
+    <link rel="stylesheet" href="styles.css">
+    
+    <!-- Import map for ES modules -->
+    <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.157.0/examples/jsm/"
+      }
+    }
+    </script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <h1>Hydrogen Orbital Visualizer</h1>
+            
+            <div class="controls">
+                <div class="quantum-numbers">
+                    <h2>Quantum Numbers</h2>
+                    <div class="control-group">
+                        <label for="n-value">Principal (n):</label>
+                        <select id="n-value">
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                        </select>
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="l-value">Angular (l):</label>
+                        <select id="l-value" disabled>
+                            <option value="0">0 (s)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="m-value">Magnetic (m):</label>
+                        <select id="m-value" disabled>
+                            <option value="0">0</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="visualization-options">
+                    <h2>Visualization</h2>
+                    <div class="control-group">
+                        <label for="particle-count">Particles:</label>
+                        <input type="range" id="particle-count" min="1000" max="10000" step="500" value="3000">
+                        <span id="particle-count-value">3000</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="formula-container">
+                <h2>Wavefunction</h2>
+                <div id="formula"></div>
+            </div>
+        </div>
+        
+        <div class="visualization">
+            <canvas id="orbital-canvas"></canvas>
+        </div>
+    </div>
+
+    <!-- Load only the main entry point as a module -->
+    <script src="js/main.js" type="module"></script>
+</body>
+</html> 
