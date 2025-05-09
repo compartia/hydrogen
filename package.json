@@ -1,0 +1,14 @@
+{
+  "name": "hydrogen",
+  "version": "1.0.0",
+  "description": "Hydrogen orbital visualizer",
+  "type": "module",
+  "main": "js/main.js",
+  "scripts": {
+    "test": "mocha js/orbital.test.js"
+  },
+  "devDependencies": {
+    "chai": "^4.3.10",
+    "mocha": "^10.2.0"
+  }
+}

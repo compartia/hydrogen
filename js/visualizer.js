@@ -55,7 +55,7 @@ class OrbitalVisualizer {
         
         // Create scene
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0xffffff);
+        this.scene.background = new THREE.Color(0x333333);
         
         // Create camera
         this.camera = new THREE.PerspectiveCamera(
@@ -72,7 +72,7 @@ class OrbitalVisualizer {
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
         this.controls.minDistance = 3;
-        this.controls.maxDistance = 20;
+        this.controls.maxDistance = 40;
         
         // Add ambient light
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -209,10 +209,11 @@ class OrbitalVisualizer {
             // Create material
             const material = new THREE.PointsMaterial({
                 color: new THREE.Color(color),
-                size: 0.05,
+                size: l === 1 ? 0.075 : 0.05, // Slightly larger particles for p-orbitals
                 transparent: true,
                 opacity: 0.7,
-                sizeAttenuation: true
+                sizeAttenuation: true,
+                blending: THREE.AdditiveBlending // Add additive blending for better visualization
             });
             
             // Create particle system

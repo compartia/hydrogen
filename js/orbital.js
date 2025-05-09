@@ -1,281 +1,300 @@
-// Import HaltonGenerator
-import { HaltonGenerator } from './halton.js';
+// hydrogen‑orbital.js  (pure ES module)
+// -----------------------------------------------------------
+// Dirac‑based hydrogen orbital utilities – public interface
+// identical to the earlier Schrödinger stub
+// -----------------------------------------------------------
+
+// Import low‑discrepancy sampler
+import { HaltonGenerator } from "./halton.js";
+
+/* ---------- physical constants (atomic units) ------------ */
+const ALPHA = 1 / 137.035999084; // fine‑structure constant
+const Z = 1; // hydrogen (Z = 1)
+const FOUR_PI = 4 * Math.PI;
+
+/* ---------- Helper: Binomial coefficient for (n + alpha choose n - k) --- */
+function computeBinomial(n, alpha, k) {
+  const m = n - k; // We need (n + alpha choose m)
+  if (m < 0) return 0;
+
+  // Compute numerator: (n + alpha)(n + alpha - 1)...(n + alpha - m + 1)
+  let numerator = 1;
+  for (let i = 0; i < m; i++) {
+    numerator *= n + alpha - i;
+  }
+
+  // Denominator: m!
+  const denominator = factorial(m);
+
+  return numerator / denominator;
+}
+
+/* ---------- associated Legendre P_l^m(x)  ----------------- */
+function associatedLegendre(l, m, x) {
+  m = Math.abs(m);
+  if (m > l) return 0;
+
+  // P_m^m
+  let pmm = 1.0;
+  if (m > 0) {
+    let fact = 1;
+    const somx2 = Math.sqrt((1 - x) * (1 + x));
+    for (let i = 1; i <= m; i++) {
+      pmm *= -fact * somx2;
+      fact += 2;
+    }
+  }
+  if (l === m) return pmm;
+
+  // P_{m+1}^m
+  let pmmp1 = x * (2 * m + 1) * pmm;
+  if (l === m + 1) return pmmp1;
+
+  // upward recursion
+  let pll = 0;
+  for (let ll = m + 2; ll <= l; ll++) {
+    pll = ((2 * ll - 1) * x * pmmp1 - (ll + m - 1) * pmm) / (ll - m);
+    pmm = pmmp1;
+    pmmp1 = pll;
+  }
+  return pll;
+}
+
+/* ---------- |Y_l^m|²  (real form, includes φ) ------------------------ */
+function angularProbability(l, m, theta, phi = 0) {
+  // Real spherical-harmonic squares for low l (enough for s and p)
+  if (l === 0) {
+    // s-orbitals – isotropic
+    return 1; // constant factor cancels in rejection sampling
+  }
+  if (l === 1) {
+    // p-orbitals – real form (px, py, pz)
+    const sinT = Math.sin(theta);
+    const cosT = Math.cos(theta);
+    if (m === 0) {
+      // pz  ∝ cos θ ⇒ |ψ|² ∝ cos² θ
+      return cosT * cosT;
+    }
+    if (m === -1) {
+      // px  ∝ sin θ cos φ ⇒ |ψ|² ∝ sin² θ cos² φ
+      const cosP = Math.cos(phi);
+      return sinT * sinT * cosP * cosP;
+    }
+    if (m === 1) {
+      // py  ∝ sin θ sin φ ⇒ |ψ|² ∝ sin² θ sin² φ
+      const sinP = Math.sin(phi);
+      return sinT * sinT * sinP * sinP;
+    }
+  }
+
+  // Fallback – φ-averaged associated Legendre (works for higher l, complex form)
+  const absM = Math.abs(m);
+  const norm =
+    ((2 * l + 1) / FOUR_PI) * (factorial(l - absM) / factorial(l + absM));
+  const P = associatedLegendre(l, absM, Math.cos(theta));
+  return norm * P * P;
+}
+
+/* ---------- calculate gamma from angular momentum quantum number -------- */
+function calculateGamma(l) {
+  const kappa = -(l + 1); // κ for j = l + ½ → κ = -(l + 1)
+  return Math.sqrt(kappa * kappa - Math.pow(Z * ALPHA, 2));
+}
+
+/* ---------- spin‑averaged Dirac radial density ------------ */
+function radialProbability(n, l, r) {
+  // κ for j = l + ½ → κ = -(l + 1)
+  const kappa = -(l + 1);
+  const gamma = calculateGamma(l);
+  const n_r = n - Math.abs(kappa); // radial quantum number
+  const rho = (2 * Z * r) / n; // scaled radius
+
+  /* --- large component (approx.) ------------------------- *
+   *  G ∝ ρ^{γ-1} e^{-ρ/2} L^{2γ}_{n_r}(ρ)
+   *  For visual fidelity up to n=3 we set L ≈ 1 when n_r = 0.
+   *  TODO: replace with full Laguerre for perfect accuracy. */
+  //   let laguerre = 1;
+  //   if (n_r > 0) {
+  //     // crude 1st‑order Laguerre approximation (good enough visually)
+  //     laguerre = 1 - rho / (1 + 2 * gamma);
+  //   }
+
+  const laguerre = associatedLaguerre(n_r, 2 * gamma, rho);
+
+  const G = Math.pow(rho, gamma - 1) * Math.exp(-rho / 2) * laguerre;
+  const F = ((ALPHA * Z) / (n + gamma)) * G; // small component
+  return G * G + F * F; // probability density (unnorm.)
+}
+
+/* ---------- 90 % cumulative radius cache ----------------- */
+const r90Cache = new Map();
 
 /**
- * Hydrogen atom orbital calculation functions
- * Based on the Dirac equation solutions for the hydrogen atom
+ * Calculates the radius containing 90% of the electron probability.
+ *
+ * Uses numerical integration of the radial probability density from r=0
+ * outward until reaching 90% of the total probability.
+ *
+ * @param {number} n - Principal quantum number
+ * @param {number} l - Angular momentum quantum number
+ * @returns {number} - Radius containing 90% of the probability
  */
+function r90(n, l) {
+  // Check cache first to avoid redundant calculations
+  const key = `${n}-${l}`;
+  if (r90Cache.has(key)) return r90Cache.get(key);
+
+  // Initialize numerical integration variables
+  let cum = 0; // cumulative probability
+  let r = 0; // current radius
+
+  // Step size scales with n² because orbital size scales with n²
+  const dr = 0.02 * n * n;
+
+  // Perform numerical integration until either:
+  // 1. We reach 90% of probability (cum >= 0.9), or 95% for l=0 orbitals, or
+  // 2. r exceeds 40*n² (safety limit to prevent infinite loops)
+  //
+  // The 40*n² upper bound is chosen because:
+  // - Hydrogen orbital sizes scale with n²
+  // - For all valid orbitals, 90% probability is reached well before 40*n²
+  // - This is a safety factor (~10-20x larger than typical r90 values)
+  const targetCum = l === 0 ? 0.95 : 0.9;
+  while (cum < targetCum && r < 40 * n * n) {
+    // Integrate: radial probability × volume element (r²dr)
+    cum += radialProbability(n, l, r) * r * r * dr;
+    r += dr;
+  }
+
+  // Store result in cache for future use
+  r90Cache.set(key, r);
+  return r;
+}
+
+/* =========================================================
+   Public class – same shape as original Schrödinger stub
+   ========================================================= */
 class HydrogenOrbital {
-    /**
-     * Calculate the radial wavefunction value
-     * @param {number} n Principal quantum number
-     * @param {number} l Angular quantum number
-     * @param {number} r Radius (in atomic units)
-     * @returns {number} Value of radial wavefunction at r
-     */
-    static radialWavefunction(n, l, r) {
-        // Scaled radius
-        const rho = 2 * r / n;
-        
-        // Normalization constant
-        const norm = Math.sqrt(
-            Math.pow(2 / n, 3) * 
-            factorial(n - l - 1) / 
-            (2 * n * factorial(n + l))
-        );
-        
-        // Calculate Laguerre polynomial
-        const laguerrePoly = this.associatedLaguerre(n - l - 1, 2 * l + 1, rho);
-        
-        // Complete radial function
-        return norm * Math.exp(-rho / 2) * Math.pow(rho, l) * laguerrePoly;
+  
+
+  /* ---- Dirac probability density |ψ|² ------------------ */
+  static probabilityDensity(n, l, m, r, theta, phi) {
+    return (
+      radialProbability(n, l, r) *
+      angularProbability(l, m, theta, phi) *
+      r * r // include volume element so density is proportional to probability in Cartesian space
+    );
+  }
+
+  /* ---- particle cloud generator ------------------------ */
+  static generateOrbitalParticles(n, l, m, particleCount = 10000) {
+    const particles = [];
+
+    // Pre-compute an approximate global maximum of the full probability density
+    // Scan radial coordinate up to 6 n² a.u. (safe upper bound)
+    let maxDensity = 0;
+    const rMax = 6 * n * n;
+    const radialSteps = 120;
+    for (let i = 0; i <= radialSteps; i++) {
+      const r = (i / radialSteps) * rMax;
+      const radPart = radialProbability(n, l, r) * r * r;
+      if (radPart > maxDensity) maxDensity = radPart;
     }
-    
-    /**
-     * Calculate the spherical harmonic value
-     * @param {number} l Angular quantum number
-     * @param {number} m Magnetic quantum number
-     * @param {number} theta Polar angle
-     * @param {number} phi Azimuthal angle
-     * @returns {object} Complex value of spherical harmonic
-     */
-    static sphericalHarmonic(l, m, theta, phi) {
-        const absM = Math.abs(m);
-        
-        // Normalization constant
-        const norm = Math.sqrt(
-            ((2 * l + 1) * factorial(l - absM)) / 
-            (4 * Math.PI * factorial(l + absM))
-        );
-        
-        // Associated Legendre polynomial
-        const legendrePoly = this.associatedLegendre(l, absM, Math.cos(theta));
-        
-        // For simplicity, we'll just use the real part of the spherical harmonic
-        // for visualization purposes
-        // In a more accurate implementation, we would handle complex values properly
-        const phaseFactor = Math.cos(m * phi);
-        
-        // For negative m, apply additional phase factor
-        const phase = (m < 0) ? Math.pow(-1, absM) : 1;
-        
-        // Return the spherical harmonic value (simplified for visualization)
-        return norm * legendrePoly * phaseFactor * phase;
+
+    // Angular part can at most be 1 with our real definitions for s and p
+    const pMax = maxDensity; // upper bound of total density
+
+    let idx = 1;
+    while (particles.length < particleCount) {
+      // Candidate: direction uniform on sphere via Halton
+      const spherical = HaltonGenerator.sphericalPoint(idx++); // { r,θ,φ } in [0,1)
+
+      // Pick radius uniformly in volume up to rMax (cube-root transform)
+      const r = rMax * Math.cbrt(spherical.r);
+      const theta = spherical.theta;
+      const phi = spherical.phi;
+
+      const density =
+        radialProbability(n, l, r) * r * r * angularProbability(l, m, theta, phi);
+
+      if (Math.random() < density / pMax) {
+        const sinT = Math.sin(theta);
+        const x = r * sinT * Math.cos(phi);
+        const y = r * sinT * Math.sin(phi);
+        const z = r * Math.cos(theta);
+        particles.push({ x, y, z });
+      }
     }
-    
-    /**
-     * Simplified implementation for associated Laguerre polynomials
-     * @param {number} n Parameter of the Laguerre polynomial
-     * @param {number} alpha Parameter of the Laguerre polynomial
-     * @param {number} x Value at which to evaluate
-     * @returns {number} Value of the associated Laguerre polynomial
-     */
-    static associatedLaguerre(n, alpha, x) {
-        if (n === 0) return 1;
-        if (n === 1) return 1 + alpha - x;
-        
-        // Use recurrence relation for higher orders
-        let L0 = 1;
-        let L1 = 1 + alpha - x;
-        
-        for (let i = 1; i < n; i++) {
-            const L2 = ((2 * i + 1 + alpha - x) * L1 - (i + alpha) * L0) / (i + 1);
-            L0 = L1;
-            L1 = L2;
-        }
-        
-        return L1;
+    return particles;
+  }
+
+  /* ---- colour helper (Balmer palette) ------------------ */
+  static getOrbitalColor(l, m) {
+    if (l === 1) {
+      // p‑orbitals
+      return ["#ff4455", "#66ffff", "#cc66ff"][m + 1];
     }
-    
-    /**
-     * Simplified implementation for associated Legendre polynomials
-     * @param {number} l Parameter of the Legendre polynomial
-     * @param {number} m Parameter of the Legendre polynomial
-     * @param {number} x Value at which to evaluate
-     * @returns {number} Value of the associated Legendre polynomial
-     */
-    static associatedLegendre(l, m, x) {
-        // Implementation for the most common cases
-        if (l === 0 && m === 0) return 1;
-        if (l === 1 && m === 0) return x;
-        if (l === 1 && m === 1) return -Math.sqrt(1 - x * x);
-        
-        // For higher orders, use a simplified approximation
-        // This is a simplification - in a production context, a complete implementation would be needed
-        if (m === 0) {
-            // Recursion for m=0
-            let P0 = 1;
-            let P1 = x;
-            
-            for (let i = 1; i < l; i++) {
-                const P2 = ((2 * i + 1) * x * P1 - i * P0) / (i + 1);
-                P0 = P1;
-                P1 = P2;
-            }
-            
-            return P1;
-        } else if (m === l) {
-            // P_l^l
-            const factor = Math.pow(-1, m) * 
-                factorial(2 * m) / 
-                (Math.pow(2, m) * factorial(m));
-            
-            return factor * Math.pow(1 - x * x, m / 2);
-        } else if (m === l - 1) {
-            // P_l^(l-1)
-            return x * (2 * l - 1) * this.associatedLegendre(l - 1, l - 1, x);
-        }
-        
-        // For other cases, use recursion
-        return ((2 * l - 1) * x * this.associatedLegendre(l - 1, m, x) - 
-                (l + m - 1) * this.associatedLegendre(l - 2, m, x)) / (l - m);
-    }
-    
-    /**
-     * Calculate the wavefunction probability for a hydrogen orbital
-     * @param {number} n Principal quantum number
-     * @param {number} l Angular quantum number
-     * @param {number} m Magnetic quantum number
-     * @param {number} r Radius
-     * @param {number} theta Polar angle
-     * @param {number} phi Azimuthal angle
-     * @returns {number} Probability density at the given point
-     */
-    static probabilityDensity(n, l, m, r, theta, phi) {
-        // For visualization we use the probability density |ψ|²
-        const R = this.radialWavefunction(n, l, r);
-        const Y = this.sphericalHarmonic(l, m, theta, phi);
-        
-        // |ψ|² = R²|Y|²
-        return R * R * Y * Y;
-    }
-    
-    /**
-     * Generate a set of particles representing the orbital
-     * @param {number} n Principal quantum number
-     * @param {number} l Angular quantum number
-     * @param {number} m Magnetic quantum number
-     * @param {number} particleCount Number of particles to generate
-     * @returns {Array} Array of particle positions
-     */
-    static generateOrbitalParticles(n, l, m, particleCount) {
-        const particles = [];
-        const rejected = new Set();
-        let accepted = 0;
-        const maxAttempts = particleCount * 10;
-        let attempts = 0;
-        
-        // Determine maximum radius for the orbital
-        const maxRadius = n * n * 2;
-        
-        while (accepted < particleCount && attempts < maxAttempts) {
-            const idx = attempts + 1;
-            if (rejected.has(idx)) {
-                attempts++;
-                continue;
-            }
-            
-            // Use Halton sequence for sampling
-            const spherical = HaltonGenerator.sphericalPoint(idx);
-            
-            // Scale radius based on orbital size
-            spherical.r *= maxRadius;
-            
-            // Calculate probability at this point
-            const probability = this.probabilityDensity(n, l, m, spherical.r, spherical.theta, spherical.phi);
-            
-            // Accept or reject based on probability
-            const randomValue = Math.random();
-            if (randomValue < probability / 0.1) {
-                const cartesian = HaltonGenerator.sphericalToCartesian(
-                    spherical.r, spherical.theta, spherical.phi
-                );
-                particles.push(cartesian);
-                accepted++;
-            } else {
-                rejected.add(idx);
-            }
-            
-            attempts++;
-        }
-        
-        return particles;
-    }
-    
-    /**
-     * Get the color for a given orbital
-     * @param {number} l Angular quantum number
-     * @param {number} m Magnetic quantum number
-     * @returns {string} Hex color code
-     */
-    static getOrbitalColor(l, m) {
-        // Basic colors for different orbital types
-        const colors = {
-            s: '#3498db', // Blue for s orbitals
-            p: {
-                '-1': '#e74c3c', // Red for p_x
-                '0': '#2ecc71',  // Green for p_y
-                '1': '#f39c12'   // Orange for p_z
-            },
-            d: {
-                '-2': '#9b59b6', // Purple
-                '-1': '#1abc9c', // Turquoise
-                '0': '#e67e22',  // Dark orange
-                '1': '#34495e',  // Navy
-                '2': '#2980b9'   // Blue
-            },
-            f: {
-                '-3': '#8e44ad', // Purple
-                '-2': '#16a085', // Green
-                '-1': '#d35400', // Orange
-                '0': '#2c3e50',  // Dark blue
-                '1': '#c0392b',  // Red
-                '2': '#27ae60',  // Green
-                '3': '#f1c40f'   // Yellow
-            }
-        };
-        
-        if (l === 0) return colors.s;
-        if (l === 1) return colors.p[m];
-        if (l === 2) return colors.d[m];
-        if (l === 3) return colors.f[m];
-        
-        // Default color
-        return '#7f8c8d';
-    }
-    
-    /**
-     * Get the LaTeX formula for a given orbital
-     * @param {number} n Principal quantum number
-     * @param {number} l Angular quantum number
-     * @param {number} m Magnetic quantum number
-     * @returns {string} LaTeX formula
-     */
-    static getOrbitalFormula(n, l, m) {
-        const orbitalTypes = ['s', 'p', 'd', 'f', 'g', 'h'];
-        const orbitalType = orbitalTypes[l] || l;
-        
-        // Return the formula in LaTeX format
-        return `\\psi_{${n}${orbitalType}}(r,\\theta,\\phi) = R_{${n}${l}}(r) \\cdot Y_{${l}}^{${m}}(\\theta,\\phi)`;
-    }
+    if (l === 0) return "#999999"; // s
+    return "#cccccc"; // default grey for higher l
+  }
+
+  /* ---- LaTeX label ------------------------------------- */
+  static getOrbitalFormula(n, l, m) {
+    const letters = ["s", "p", "d", "f", "g", "h"];
+    const L = letters[l] || `l=${l}`;
+    return `\\psi_{${n}${L}}(r,\\theta,\\phi)=R_{${n}${l}}(r)\\,Y^{${m}}_{${l}}(\\theta,\\phi)`;
+  }
 }
 
-/**
- * Calculate factorial
- * @param {number} n Number
- * @returns {number} n!
- */
-function factorial(n) {
-    if (n < 0) return 0;
-    if (n === 0 || n === 1) return 1;
-    
-    let result = 1;
-    for (let i = 2; i <= n; i++) {
-        result *= i;
+/* ---------- Associated Laguerre polynomial L_n^alpha(x) ----------------- */
+// function associatedLaguerre(n, alpha, x) {
+//   if (n < 0 || !Number.isInteger(n)) return 0; // Invalid n
+//   if (x < 0) return 0; // Laguerre polynomials are typically evaluated for x >= 0
+
+//   // For n = 0, L_0^alpha(x) = 1
+//   if (n === 0) return 1;
+
+//   let result = 0;
+//   for (let k = 0; k <= n; k++) {
+//     // Compute binomial coefficient (n + alpha choose n - k)
+//     const binomial = computeBinomial(n, alpha, k);
+//     // Term: (-1)^k * binomial * x^k / k!
+//     const term = (Math.pow(-1, k) * binomial * Math.pow(x, k)) / factorial(k);
+//     result += term;
+//   }
+//   return result;
+// }
+
+function associatedLaguerre(n, alpha, x) {
+    if (n < 0 || !Number.isInteger(n) || x < 0) return 0;
+    if (n === 0) return 1;
+  
+    let result = 0;
+    for (let k = 0; k <= n; k++) {
+      const binomial = computeBinomial(n, alpha, k);
+      const term = (Math.pow(-1, k) * binomial * Math.pow(x, k)) / factorial(k);
+      result += term;
     }
-    
     return result;
+  }
+
+/* ---------- Factorial (reused from original code) ----------------------- */
+function factorial(n) {
+  if (n < 0) return 0;
+  if (n === 0 || n === 1) return 1;
+  let res = 1;
+  for (let i = 2; i <= n; i++) res *= i;
+  return res;
 }
 
-// Export the HydrogenOrbital class and factorial function
-export { HydrogenOrbital, factorial }; 
+// named exports (same as original file plus additional math functions for testing)
+export {
+  HydrogenOrbital,
+  factorial,
+  associatedLegendre,
+  angularProbability,
+  radialProbability,
+  calculateGamma,
+  associatedLaguerre,
+  r90,
+};
