@@ -4,7 +4,8 @@
 // identical to the earlier Schrödinger stub
 // -----------------------------------------------------------
 
-// Import low‑discrepancy sampler
+// Import low‑discrepancy sampler TODO: we probably must use is. to be tested. dunno
+
 import { HaltonGenerator } from "./halton.js";
 
 /* ---------- physical constants (atomic units) ------------ */
@@ -204,15 +205,21 @@ class HydrogenOrbital {
     // Angular part can at most be 1 with our real definitions for s and p
     const pMax = maxDensity; // upper bound of total density
 
-    let idx = 1;
     while (particles.length < particleCount) {
-      // Candidate: direction uniform on sphere via Halton
-      const spherical = HaltonGenerator.sphericalPoint(idx++); // { r,θ,φ } in [0,1)
+              // Candidate: direction uniform on sphere via Halton
+    //   const spherical = HaltonGenerator.sphericalPoint(idx++); // { r,θ,φ } in [0,1)
+
+
+      // Candidate: generate fully random spherical coordinates for isotropy
+      const u = Math.random();
+      const v = Math.random();
+
+      // Theta: arccos(1 − 2u) ensures uniform distribution on sphere
+      const theta = Math.acos(1 - 2 * u);
+      const phi = 2 * Math.PI * v;
 
       // Pick radius uniformly in volume up to rMax (cube-root transform)
-      const r = rMax * Math.cbrt(spherical.r);
-      const theta = spherical.theta;
-      const phi = spherical.phi;
+      const r = rMax * Math.cbrt(Math.random());
 
       const density =
         radialProbability(n, l, r) * r * r * angularProbability(l, m, theta, phi);
@@ -246,24 +253,7 @@ class HydrogenOrbital {
   }
 }
 
-/* ---------- Associated Laguerre polynomial L_n^alpha(x) ----------------- */
-// function associatedLaguerre(n, alpha, x) {
-//   if (n < 0 || !Number.isInteger(n)) return 0; // Invalid n
-//   if (x < 0) return 0; // Laguerre polynomials are typically evaluated for x >= 0
-
-//   // For n = 0, L_0^alpha(x) = 1
-//   if (n === 0) return 1;
-
-//   let result = 0;
-//   for (let k = 0; k <= n; k++) {
-//     // Compute binomial coefficient (n + alpha choose n - k)
-//     const binomial = computeBinomial(n, alpha, k);
-//     // Term: (-1)^k * binomial * x^k / k!
-//     const term = (Math.pow(-1, k) * binomial * Math.pow(x, k)) / factorial(k);
-//     result += term;
-//   }
-//   return result;
-// }
+ 
 
 function associatedLaguerre(n, alpha, x) {
     if (n < 0 || !Number.isInteger(n) || x < 0) return 0;

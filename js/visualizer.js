@@ -25,7 +25,7 @@ class OrbitalVisualizer {
         this.currentN = 1;
         this.currentL = 0;
         this.currentM = 0;
-        this.particleCount = 3000;
+        this.particleCount = 20000;
         
         // Current particle system
         this.particles = null;
@@ -56,6 +56,7 @@ class OrbitalVisualizer {
         // Create scene
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x333333);
+        this.scene.fog = new THREE.Fog(0x333333, 4, 30);
         
         // Create camera
         this.camera = new THREE.PerspectiveCamera(
@@ -72,7 +73,7 @@ class OrbitalVisualizer {
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
         this.controls.minDistance = 3;
-        this.controls.maxDistance = 40;
+        this.controls.maxDistance = 140;
         
         // Add ambient light
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -155,10 +156,31 @@ class OrbitalVisualizer {
         
         // Slowly rotate the scene for better 3D perception
         if (this.particles) {
-            this.particles.rotation.y += 0.001;
+            this.particles.rotation.y += 0.01;
         }
         
         this.renderer.render(this.scene, this.camera);
+    }
+    
+    /**
+     * Calculate the bounding box of particle positions
+     * @param {Array} positions Array of particle position objects with x, y, z properties
+     * @returns {Object} Object containing min and max coordinates and extents
+     */
+    calculateBoundingBox(positions) {
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        for (let i = 0; i < positions.length; i++) {
+            const p = positions[i];
+            minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+            minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+            minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+        }
+        const extentX = maxX - minX;
+        const extentY = maxY - minY;
+        const extentZ = maxZ - minZ;
+        const maxExtent = Math.max(extentX, extentY, extentZ);
+        return { minX, minY, minZ, maxX, maxY, maxZ, extentX, extentY, extentZ, maxExtent };
     }
     
     /**
@@ -188,40 +210,55 @@ class OrbitalVisualizer {
         // Get orbital color
         const color = HydrogenOrbital.getOrbitalColor(l, m);
         
-        // Generate particle positions (this can be computationally intensive)
-        setTimeout(() => {
-            // Generate particle positions
-            const positions = HydrogenOrbital.generateOrbitalParticles(n, l, m, particleCount);
-            
-            // Create geometry
-            const geometry = new THREE.BufferGeometry();
-            const positionArray = new Float32Array(particleCount * 3);
-            
-            // Fill position array
-            for (let i = 0; i < positions.length; i++) {
-                positionArray[i * 3] = positions[i].x;
-                positionArray[i * 3 + 1] = positions[i].y;
-                positionArray[i * 3 + 2] = positions[i].z;
-            }
-            
-            geometry.setAttribute('position', new THREE.BufferAttribute(positionArray, 3));
-            
-            // Create material
-            const material = new THREE.PointsMaterial({
-                color: new THREE.Color(color),
-                size: l === 1 ? 0.075 : 0.05, // Slightly larger particles for p-orbitals
-                transparent: true,
-                opacity: 0.7,
-                sizeAttenuation: true,
-                blending: THREE.AdditiveBlending // Add additive blending for better visualization
-            });
-            
-            // Create particle system
-            this.particles = new THREE.Points(geometry, material);
-            this.scene.add(this.particles);
-            
-            this.isLoading = false;
-        }, 0);
+        // Generate particle positions
+        const positions = HydrogenOrbital.generateOrbitalParticles(n, l, m, particleCount);
+
+        // Calculate bounding box for fog, camera, and particle size adjustment
+        const bbox = this.calculateBoundingBox(positions);
+
+        // Update fog based on the largest extent
+        if (this.scene.fog) {
+            this.scene.fog.far = bbox.maxExtent *1.5; // Add a buffer of 5 units
+        } else {
+            // Initialize fog if it doesn't exist
+            this.scene.fog = new THREE.Fog(0x333333, 10, bbox.maxExtent + 5);
+        }
+
+        // Adjust camera position to ensure ~80% of particles are visible
+        // Using FOV of 60 degrees, set camera distance to cover most of the orbital
+        const fovRad = THREE.MathUtils.degToRad(this.camera.fov); // Convert FOV to radians
+        const cameraDistance = (bbox.maxExtent / 2) / Math.sin(fovRad / 2) * 1.25; // Adjust multiplier for ~80% visibility
+        this.camera.position.set(0, 0, cameraDistance);
+        this.controls.update();
+
+        // Create geometry
+        const geometry = new THREE.BufferGeometry();
+        const positionArray = new Float32Array(particleCount * 3);
+        
+        // Fill position array
+        for (let i = 0; i < positions.length; i++) {
+            positionArray[i * 3] = positions[i].x;
+            positionArray[i * 3 + 1] = positions[i].y;
+            positionArray[i * 3 + 2] = positions[i].z;
+        }
+        
+        geometry.setAttribute('position', new THREE.BufferAttribute(positionArray, 3));
+        
+        // Create material
+        const material = new THREE.PointsMaterial({
+            color: new THREE.Color(color),
+            size: Math.max(0.05, bbox.maxExtent * 0.005), // Particle size proportional to largest extent, with minimum size
+            transparent: true,
+            opacity: 0.6,
+            // sizeAttenuation: true,
+            // blending: THREE.AdditiveBlending // Add additive blending for better visualization
+        });
+        
+        // Create particle system
+        this.particles = new THREE.Points(geometry, material);
+        this.scene.add(this.particles);
+        
+        this.isLoading = false;
     }
     
     /**
